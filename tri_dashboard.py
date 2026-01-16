@@ -16,16 +16,13 @@ SHAPEFILE_PATH = "DISTRICT_BOUNDARY.shp"
 
 st.set_page_config(page_title=PAGE_TITLE, layout="wide")
 
-# ================= CUSTOM CSS (MAKE TEXT BIGGER & LIGHT THEME) =================
+# ================= CUSTOM CSS =================
 st.markdown("""
 <style>
-    /* Force Light Background for main area */
     .stApp {
         background-color: white;
         color: black;
     }
-    
-    /* Make Radio Buttons (Risk Selection) BIGGER */
     div[role="radiogroup"] > label {
         font-size: 22px !important;
         font-weight: bold !important;
@@ -33,7 +30,7 @@ st.markdown("""
         border: 2px solid #e0e0e0;
         border-radius: 10px;
         margin-right: 15px;
-        background-color: white; /* Ensure light background */
+        background-color: white;
         color: black;
     }
     div[role="radiogroup"] {
@@ -41,13 +38,9 @@ st.markdown("""
         flex-direction: row;
         gap: 20px;
     }
-    
-    /* Make Sidebar Text Bigger */
     .css-1d391kg, .css-12oz5g7 {
         font-size: 18px !important;
     }
-    
-    /* Bigger Metrics */
     div[data-testid="stMetricValue"] {
         font-size: 28px !important;
     }
@@ -67,12 +60,8 @@ def load_state_files():
 
 @st.cache_data
 def load_shapefile():
-    """Loads map and SIMPLIFIES geometry for 10x Speed Boost"""
     if os.path.exists(SHAPEFILE_PATH):
         gdf = gpd.read_file(SHAPEFILE_PATH)
-        
-        # Simplify geometry (Make map faster)
-        # Tolerance 0.01 removes tiny details but keeps shape visible
         gdf.geometry = gdf.geometry.simplify(0.01)
         
         if gdf.crs != "EPSG:4326":
@@ -85,7 +74,6 @@ def load_shapefile():
 
 @st.cache_data
 def load_all_districts_data(file_path):
-    """Reads the ENTIRE Excel file at once."""
     try:
         return pd.read_excel(file_path, sheet_name=None)
     except:
@@ -105,13 +93,9 @@ def get_risk_label(prob, type='flood'):
     return "Unknown"
 
 def calculate_risk_months(df):
-    """Identifies which months have High Risk"""
     df['Month'] = df['Date'].dt.month_name()
-    
-    # Filter High Risks (>40%)
     high_heat = df[df['Heat_Prob_%'] > 40]['Month'].unique()
     high_flood = df[df['Extreme_Rain_Prob_%'] > 40]['Month'].unique()
-    
     return list(high_heat), list(high_flood)
 
 # ================= MAIN DASHBOARD =================
@@ -125,7 +109,6 @@ def main():
         st.error("🚨 No data found.")
         st.stop()
 
-    # Sidebar
     st.sidebar.header("📍 Settings")
     selected_state = st.sidebar.selectbox("Select State", list(available_states.keys()))
     state_file_path = available_states[selected_state]
@@ -149,14 +132,11 @@ def main():
         
     with col2:
         week_of_month = st.selectbox("📆 Select Week", ["Week 1", "Week 2", "Week 3", "Week 4"])
-        
-        # Calculate Week Number (Approx)
         month_idx = months.index(selected_month)
         week_of_year = (month_idx * 4) + int(week_of_month.split(" ")[1])
         if week_of_year > 52: week_of_year = 52
 
     with col3:
-        # BIG MENU for Risk Selection
         map_view = st.radio("Visualize Risk Type:", ["Flood Risk", "Heat Risk"], horizontal=True)
 
     # --- 3. MAP ---
@@ -186,19 +166,19 @@ def main():
 
             if week_risk_data:
                 risk_df = pd.DataFrame(week_risk_data)
-               # PASTE THIS NEW CODE
-# This merges the data and fills missing values without breaking the map shapes
-map_data = state_gdf.merge(risk_df, left_on='DIST_CLEAN', right_on='District_Match', how='left')
-
-# We only fill specific data columns with 0 or "No Data"
-# This prevents the 'TypeError' you saw on Streamlit Cloud
-cols_to_fill = ['Heat_Val', 'Flood_Val', 'Heat_Label', 'Flood_Label', 'Rain_Poss']
-for col in cols_to_fill:
-    if col in map_data.columns:
-        if 'Val' in col:
-            map_data[col] = map_data[col].fillna(0)
-        else:
-            map_data[col] = map_data[col].fillna("No Data")
+                
+                # MERGE DATA
+                map_data = state_gdf.merge(risk_df, left_on='DIST_CLEAN', right_on='District_Match', how='left')
+                
+                # --- FIXED: TARGETED FILLNA ---
+                # This prevents the TypeError by only filling specific data columns, not the geometry
+                cols_to_fill = ['Heat_Val', 'Flood_Val', 'Heat_Label', 'Flood_Label', 'Rain_Poss']
+                for col in cols_to_fill:
+                    if col in map_data.columns:
+                        if 'Val' in col:
+                            map_data[col] = map_data[col].fillna(0)
+                        else:
+                            map_data[col] = map_data[col].fillna("No Data")
                 
                 # Determine Colors
                 if map_view == "Heat Risk":
@@ -210,7 +190,6 @@ for col in cols_to_fill:
                     colors = "Blues"
                     hover_label = 'Flood_Label'
                 
-                # Use Center of Geometry (Safe method)
                 lat_center = map_data.geometry.centroid.y.mean()
                 lon_center = map_data.geometry.centroid.x.mean()
 
@@ -221,14 +200,14 @@ for col in cols_to_fill:
                     color=color_col,
                     color_continuous_scale=colors,
                     range_color=(0, 100),
-                    mapbox_style="carto-positron", # Light Map
+                    mapbox_style="carto-positron",
                     center={"lat": lat_center, "lon": lon_center},
                     zoom=5.5,
                     opacity=0.6,
                     hover_name='District_Match',
                     hover_data={
                         color_col: False,
-                        hover_label: True, # Shows "High", "Low" etc
+                        hover_label: True,
                         'Rain_Poss': True
                     },
                     title=f"{map_view} - {selected_month} {week_of_month}"
@@ -238,26 +217,23 @@ for col in cols_to_fill:
 
     st.markdown("---")
 
-    # --- 4. RISK SEASON ANALYSIS (New Feature) ---
+    # --- 4. RISK SEASON ANALYSIS ---
     st.subheader("📊 District Risk Profile")
     
     sel_dist = st.selectbox("Select District for Details", district_list)
     
     if sel_dist:
         d_df = all_districts_data[sel_dist]
-        d_df['Date'] = pd.to_datetime(d_df['Date']) # Ensure datetime
+        d_df['Date'] = pd.to_datetime(d_df['Date'])
         
-        # Calculate Risk Months
         heat_months, flood_months = calculate_risk_months(d_df)
         
-        # Display Risk Months nicely
         c1, c2 = st.columns(2)
         with c1:
             st.info(f"**🔥 Heat Risk Months:** {', '.join(heat_months) if heat_months else 'None'}")
         with c2:
             st.info(f"**⛈️ Flood Risk Months:** {', '.join(flood_months) if flood_months else 'None'}")
             
-        # Current Selection Status
         curr_row = d_df[d_df['Week'] == week_of_year].iloc[0]
         
         m1, m2, m3 = st.columns(3)
@@ -266,5 +242,4 @@ for col in cols_to_fill:
         m3.metric("Heat Probability", f"{int(curr_row['Heat_Prob_%'])}% ({get_risk_label(curr_row['Heat_Prob_%'], 'heat')})")
 
 if __name__ == "__main__":
-
     main()
