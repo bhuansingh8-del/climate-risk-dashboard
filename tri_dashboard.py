@@ -5,16 +5,15 @@ import plotly.express as px
 import os
 import glob
 import warnings
+import difflib  # Library for Smart Spelling Matches
 
-# Suppress Warnings
+# Suppress Warnings to keep dashboard clean
 warnings.filterwarnings("ignore")
 
 # ================= CONFIGURATION =================
 PAGE_TITLE = "TRI Dashboard (IDS-DRR)"
 AVAILABLE_YEARS = [2026]
-
-# ⚠️ IMPORTANT: If your file on GitHub is named "DISTRICT_BOUNDARY_CLEAN.shp", change this line!
-SHAPEFILE_PATH = "DISTRICT_BOUNDARY.shp" 
+SHAPEFILE_PATH = "DISTRICT_BOUNDARY.shp"
 
 st.set_page_config(page_title=PAGE_TITLE, layout="wide")
 
@@ -26,11 +25,11 @@ st.markdown("""
         color: black;
     }
     div[role="radiogroup"] > label {
-        font-size: 22px !important;
+        font-size: 20px !important;
         font-weight: bold !important;
-        padding: 15px 30px;
+        padding: 10px 25px;
         border: 2px solid #e0e0e0;
-        border-radius: 10px;
+        border-radius: 8px;
         margin-right: 15px;
         background-color: white;
         color: black;
@@ -38,63 +37,53 @@ st.markdown("""
     div[role="radiogroup"] {
         display: flex;
         flex-direction: row;
-        gap: 20px;
+        gap: 15px;
     }
     div[data-testid="stMetricValue"] {
-        font-size: 28px !important;
+        font-size: 26px !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ================= DATA FUNCTIONS =================
+# ================= DATA LOADING FUNCTIONS =================
 
 @st.cache_data
 def load_state_files():
+    """Finds all the detailed prediction Excel files."""
     files = glob.glob("*_DETAILED_PREDICTIONS_*.xlsx")
     state_map = {}
     for f in files:
-        # Extract state name: "ASSAM_DETAILED_PREDICTIONS..." -> "ASSAM"
+        # Clean filename to get nice state name
         state_name = os.path.basename(f).split("_DETAILED")[0].replace("_", " ")
         state_map[state_name] = f
     return state_map
 
 @st.cache_data
 def load_shapefile():
+    """Loads map and cleans state names."""
     if os.path.exists(SHAPEFILE_PATH):
-        # Read file
         gdf = gpd.read_file(SHAPEFILE_PATH)
         
-        # Force conversion to Lat/Lon (Standard for Web Maps)
+        # Ensure Lat/Lon projection for Web Maps
         if gdf.crs != "EPSG:4326":
             gdf = gdf.to_crs(epsg=4326)
             
         # Standardize Names
         gdf['STATE_CLEAN'] = gdf['STATE'].str.upper().str.strip()
         gdf['DIST_CLEAN'] = gdf['District'].str.upper().str.strip()
-        
-        # === SPELLING FIXER (Fixes Maharashtra, Chhattisgarh, etc.) ===
-        state_fixes = {
-            'CHHATISGARH': 'CHHATTISGARH',   # Fixes missing 'T'
-            'CHATTISGARH': 'CHHATTISGARH',
-            'ORISSA': 'ODISHA',
-            'UTTARANCHAL': 'UTTARAKHAND',
-            'JAMMU AND KASHMIR': 'JAMMU & KASHMIR',
-            'PONDICHERRY': 'PUDUCHERRY',
-            'MAHARASTRA': 'MAHARASHTRA'      # Fixes missing 'H'
-        }
-        gdf['STATE_CLEAN'] = gdf['STATE_CLEAN'].replace(state_fixes)
-        
         return gdf
     return None
 
 @st.cache_data
 def load_all_districts_data(file_path):
+    """Reads the ENTIRE Excel file at once for speed."""
     try:
         return pd.read_excel(file_path, sheet_name=None)
     except:
         return None
 
 def get_risk_label(prob, type='flood'):
+    """Converts Probability % into Text Labels."""
     if type == 'flood':
         if prob < 20: return "Low"
         elif prob < 40: return "Moderate"
@@ -108,6 +97,7 @@ def get_risk_label(prob, type='flood'):
     return "Unknown"
 
 def calculate_risk_months(df):
+    """Identifies which months have High Risk."""
     df['Month'] = df['Date'].dt.month_name()
     high_heat = df[df['Heat_Prob_%'] > 40]['Month'].unique()
     high_flood = df[df['Extreme_Rain_Prob_%'] > 40]['Month'].unique()
@@ -121,7 +111,7 @@ def main():
     # --- 1. SETUP ---
     available_states = load_state_files()
     if not available_states:
-        st.error("🚨 No data found.")
+        st.error("🚨 No data found. Please run the prediction script first.")
         st.stop()
 
     st.sidebar.header("📍 Settings")
@@ -147,6 +137,7 @@ def main():
         
     with col2:
         week_of_month = st.selectbox("📆 Select Week", ["Week 1", "Week 2", "Week 3", "Week 4"])
+        # Calculate Week Number (Approx)
         month_idx = months.index(selected_month)
         week_of_year = (month_idx * 4) + int(week_of_month.split(" ")[1])
         if week_of_year > 52: week_of_year = 52
@@ -154,13 +145,30 @@ def main():
     with col3:
         map_view = st.radio("Visualize Risk Type:", ["Flood Risk", "Heat Risk"], horizontal=True)
 
-    # --- 3. MAP LOGIC ---
+    # --- 3. SMART MAP LOGIC (The Fix) ---
     gdf = load_shapefile()
     
     if gdf is not None:
-        # Filter for selected state (using flexible matching)
-        state_gdf = gdf[gdf['STATE_CLEAN'].str.contains(selected_state.split()[0], na=False)].copy()
+        # === AUTO-MATCH STATE NAME ===
+        # This finds the closest state name in the map, even if spelling is wrong
+        map_states = gdf['STATE_CLEAN'].unique()
+        clean_selected = selected_state.upper().strip()
         
+        # Use fuzzy matching (cutoff=0.6 means 60% similarity required)
+        matches = difflib.get_close_matches(clean_selected, map_states, n=1, cutoff=0.6)
+        
+        if matches:
+            matched_state = matches[0]
+            if matched_state != clean_selected:
+                st.success(f"🗺️ Auto-Matched Map: '{selected_state}' ➡️ '{matched_state}'")
+            
+            # Filter Map for the matched state
+            state_gdf = gdf[gdf['STATE_CLEAN'] == matched_state].copy()
+        else:
+            st.error(f"❌ Could not find a map layer for '{selected_state}'.")
+            st.write("Available States in Map:", map_states)
+            state_gdf = pd.DataFrame() # Empty frame
+
         if not state_gdf.empty:
             week_risk_data = []
             
@@ -184,11 +192,14 @@ def main():
             if week_risk_data:
                 risk_df = pd.DataFrame(week_risk_data)
                 
-                # === SAFE MERGE ===
+                # === SAFE MERGE & FILLNA (Prevents Crashes) ===
+                # 1. Merge
                 map_data = state_gdf.merge(risk_df, left_on='DIST_CLEAN', right_on='District_Match', how='left')
+                
+                # 2. Force GeoDataFrame
                 map_data = gpd.GeoDataFrame(map_data, geometry='geometry')
                 
-                # === SAFE FILLNA (Prevents crash) ===
+                # 3. Fill only data columns (Not geometry)
                 cols_to_fill = ['Heat_Val', 'Flood_Val', 'Heat_Label', 'Flood_Label', 'Rain_Poss']
                 for col in cols_to_fill:
                     if col in map_data.columns:
@@ -234,11 +245,11 @@ def main():
                 fig_map.update_layout(height=600, margin={"r":0,"t":40,"l":0,"b":0})
                 st.plotly_chart(fig_map, use_container_width=True)
             else:
-                st.warning(f"No prediction data matches the map for {selected_state}.")
+                st.warning(f"No prediction data matched the map districts for {selected_state}.")
 
     st.markdown("---")
 
-    # --- 4. RISK SEASON ANALYSIS ---
+    # --- 4. DISTRICT RISK PROFILE ---
     st.subheader("📊 District Risk Profile")
     
     sel_dist = st.selectbox("Select District for Details", district_list)
@@ -263,35 +274,26 @@ def main():
         m3.metric("Heat Probability", f"{int(curr_row['Heat_Prob_%'])}% ({get_risk_label(curr_row['Heat_Prob_%'], 'heat')})")
 
     # ================= 5. DEBUGGING TOOL =================
-    # This helps you fix maps if they are still grey
     with st.expander("🛠️ Map Troubleshooter (Click if map is empty)"):
-        st.write(f"**Selected State:** {selected_state}")
+        st.write(f"**Selected Excel State:** {selected_state}")
         
         if gdf is not None:
-            # Check if State exists
-            all_map_states = gdf['STATE_CLEAN'].unique()
-            # Try partial match
-            match = [s for s in all_map_states if selected_state.split()[0] in s]
-            
-            if match:
-                st.success(f"✅ Found State in Map as: '{match[0]}'")
-            else:
-                st.error(f"❌ Could not find '{selected_state}' in map.")
-                st.write("Available States:", all_map_states)
-            
             # Check District Matching
             st.write("**District Mismatch Check:**")
             excel_districts = set([k.upper().strip() for k in all_districts_data.keys()])
             
-            if match:
-                map_districts = set(gdf[gdf['STATE_CLEAN'] == match[0]]['DIST_CLEAN'].unique())
+            # Use the Matched State from Logic
+            if 'matched_state' in locals():
+                map_districts = set(gdf[gdf['STATE_CLEAN'] == matched_state]['DIST_CLEAN'].unique())
+                common = excel_districts.intersection(map_districts)
                 missing = excel_districts - map_districts
                 
+                st.write(f"✅ Matched Districts: {len(common)}")
                 if missing:
-                    st.warning(f"⚠️ {len(missing)} districts are in Excel but NOT in Map (Name mismatch):")
-                    st.write(list(missing))
-                else:
-                    st.success("✅ All districts match perfectly!")
+                    st.warning(f"⚠️ {len(missing)} districts are in Excel but NOT in Map:")
+                    st.code(list(missing))
+            else:
+                st.write("Could not check districts because State Name did not match.")
 
 if __name__ == "__main__":
     main()
