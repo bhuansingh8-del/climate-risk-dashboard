@@ -6,7 +6,7 @@ import os
 import glob
 import warnings
 
-# Suppress Warnings to keep dashboard clean
+# Suppress Warnings
 warnings.filterwarnings("ignore")
 
 # ================= CONFIGURATION =================
@@ -38,22 +38,20 @@ st.markdown("""
         flex-direction: row;
         gap: 20px;
     }
-    .css-1d391kg, .css-12oz5g7 {
-        font-size: 18px !important;
-    }
     div[data-testid="stMetricValue"] {
         font-size: 28px !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ================= OPTIMIZED DATA FUNCTIONS =================
+# ================= DATA FUNCTIONS =================
 
 @st.cache_data
 def load_state_files():
     files = glob.glob("*_DETAILED_PREDICTIONS_*.xlsx")
     state_map = {}
     for f in files:
+        # Extract state name: "ASSAM_DETAILED_PREDICTIONS..." -> "ASSAM"
         state_name = os.path.basename(f).split("_DETAILED")[0].replace("_", " ")
         state_map[state_name] = f
     return state_map
@@ -61,12 +59,14 @@ def load_state_files():
 @st.cache_data
 def load_shapefile():
     if os.path.exists(SHAPEFILE_PATH):
+        # Read file
         gdf = gpd.read_file(SHAPEFILE_PATH)
-        gdf.geometry = gdf.geometry.simplify(0.01)
         
+        # Force conversion to Lat/Lon (Standard for Web Maps)
         if gdf.crs != "EPSG:4326":
             gdf = gdf.to_crs(epsg=4326)
             
+        # Standardize Names
         gdf['STATE_CLEAN'] = gdf['STATE'].str.upper().str.strip()
         gdf['DIST_CLEAN'] = gdf['District'].str.upper().str.strip()
         return gdf
@@ -139,15 +139,17 @@ def main():
     with col3:
         map_view = st.radio("Visualize Risk Type:", ["Flood Risk", "Heat Risk"], horizontal=True)
 
-    # --- 3. MAP ---
+    # --- 3. MAP LOGIC (CRITICAL FIX) ---
     gdf = load_shapefile()
     
     if gdf is not None:
+        # Filter for selected state
         state_gdf = gdf[gdf['STATE_CLEAN'].str.contains(selected_state.split()[0], na=False)].copy()
         
         if not state_gdf.empty:
             week_risk_data = []
             
+            # Prepare Risk Data
             for dist_name, df in all_districts_data.items():
                 row = df[df['Week'] == week_of_year]
                 if not row.empty:
@@ -167,11 +169,14 @@ def main():
             if week_risk_data:
                 risk_df = pd.DataFrame(week_risk_data)
                 
-                # MERGE DATA
+                # === FIX: SAFE MERGE ===
+                # 1. Merge DataFrame
                 map_data = state_gdf.merge(risk_df, left_on='DIST_CLEAN', right_on='District_Match', how='left')
                 
-                # --- FIXED: TARGETED FILLNA ---
-                # This prevents the TypeError by only filling specific data columns, not the geometry
+                # 2. FORCE IT BACK TO BE A GEODATAFRAME (Crucial for Plotly)
+                map_data = gpd.GeoDataFrame(map_data, geometry='geometry')
+                
+                # 3. SAFE FILLNA (Only fill data columns, not geometry)
                 cols_to_fill = ['Heat_Val', 'Flood_Val', 'Heat_Label', 'Flood_Label', 'Rain_Poss']
                 for col in cols_to_fill:
                     if col in map_data.columns:
@@ -190,9 +195,11 @@ def main():
                     colors = "Blues"
                     hover_label = 'Flood_Label'
                 
+                # Calculate Center safely
                 lat_center = map_data.geometry.centroid.y.mean()
                 lon_center = map_data.geometry.centroid.x.mean()
 
+                # PLOT MAP
                 fig_map = px.choropleth_mapbox(
                     map_data,
                     geojson=map_data.geometry,
@@ -214,6 +221,8 @@ def main():
                 )
                 fig_map.update_layout(height=600, margin={"r":0,"t":40,"l":0,"b":0})
                 st.plotly_chart(fig_map, use_container_width=True)
+            else:
+                st.warning(f"No prediction data matches the map for {selected_state}. Check spelling in Excel vs Shapefile.")
 
     st.markdown("---")
 
