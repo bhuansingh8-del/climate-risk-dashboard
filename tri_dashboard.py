@@ -12,7 +12,7 @@ warnings.filterwarnings("ignore")
 # ================= CONFIGURATION =================
 PAGE_TITLE = "TRI Dashboard (IDS-DRR)"
 AVAILABLE_YEARS = [2026]
-SHAPEFILE_PATH = "DISTRICT_BOUNDARY.shp"
+SHAPEFILE_PATH = "DISTRICT_BOUNDARY_CLEAN.shp"
 
 st.set_page_config(page_title=PAGE_TITLE, layout="wide")
 
@@ -252,3 +252,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
