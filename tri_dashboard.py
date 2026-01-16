@@ -186,8 +186,19 @@ def main():
 
             if week_risk_data:
                 risk_df = pd.DataFrame(week_risk_data)
-                map_data = state_gdf.merge(risk_df, left_on='DIST_CLEAN', right_on='District_Match', how='left')
-                map_data = map_data.fillna(0)
+               # PASTE THIS NEW CODE
+# This merges the data and fills missing values without breaking the map shapes
+map_data = state_gdf.merge(risk_df, left_on='DIST_CLEAN', right_on='District_Match', how='left')
+
+# We only fill specific data columns with 0 or "No Data"
+# This prevents the 'TypeError' you saw on Streamlit Cloud
+cols_to_fill = ['Heat_Val', 'Flood_Val', 'Heat_Label', 'Flood_Label', 'Rain_Poss']
+for col in cols_to_fill:
+    if col in map_data.columns:
+        if 'Val' in col:
+            map_data[col] = map_data[col].fillna(0)
+        else:
+            map_data[col] = map_data[col].fillna("No Data")
                 
                 # Determine Colors
                 if map_view == "Heat Risk":
@@ -255,4 +266,5 @@ def main():
         m3.metric("Heat Probability", f"{int(curr_row['Heat_Prob_%'])}% ({get_risk_label(curr_row['Heat_Prob_%'], 'heat')})")
 
 if __name__ == "__main__":
+
     main()
