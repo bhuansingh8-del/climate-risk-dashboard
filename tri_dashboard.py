@@ -12,7 +12,9 @@ warnings.filterwarnings("ignore")
 # ================= CONFIGURATION =================
 PAGE_TITLE = "TRI Dashboard (IDS-DRR)"
 AVAILABLE_YEARS = [2026]
-SHAPEFILE_PATH = "DISTRICT_BOUNDARY_CLEAN.shp"
+
+# ⚠️ IMPORTANT: If your file on GitHub is named "DISTRICT_BOUNDARY_CLEAN.shp", change this line!
+SHAPEFILE_PATH = "DISTRICT_BOUNDARY.shp" 
 
 st.set_page_config(page_title=PAGE_TITLE, layout="wide")
 
@@ -69,6 +71,19 @@ def load_shapefile():
         # Standardize Names
         gdf['STATE_CLEAN'] = gdf['STATE'].str.upper().str.strip()
         gdf['DIST_CLEAN'] = gdf['District'].str.upper().str.strip()
+        
+        # === SPELLING FIXER (Fixes Maharashtra, Chhattisgarh, etc.) ===
+        state_fixes = {
+            'CHHATISGARH': 'CHHATTISGARH',   # Fixes missing 'T'
+            'CHATTISGARH': 'CHHATTISGARH',
+            'ORISSA': 'ODISHA',
+            'UTTARANCHAL': 'UTTARAKHAND',
+            'JAMMU AND KASHMIR': 'JAMMU & KASHMIR',
+            'PONDICHERRY': 'PUDUCHERRY',
+            'MAHARASTRA': 'MAHARASHTRA'      # Fixes missing 'H'
+        }
+        gdf['STATE_CLEAN'] = gdf['STATE_CLEAN'].replace(state_fixes)
+        
         return gdf
     return None
 
@@ -139,11 +154,11 @@ def main():
     with col3:
         map_view = st.radio("Visualize Risk Type:", ["Flood Risk", "Heat Risk"], horizontal=True)
 
-    # --- 3. MAP LOGIC (CRITICAL FIX) ---
+    # --- 3. MAP LOGIC ---
     gdf = load_shapefile()
     
     if gdf is not None:
-        # Filter for selected state
+        # Filter for selected state (using flexible matching)
         state_gdf = gdf[gdf['STATE_CLEAN'].str.contains(selected_state.split()[0], na=False)].copy()
         
         if not state_gdf.empty:
@@ -169,14 +184,11 @@ def main():
             if week_risk_data:
                 risk_df = pd.DataFrame(week_risk_data)
                 
-                # === FIX: SAFE MERGE ===
-                # 1. Merge DataFrame
+                # === SAFE MERGE ===
                 map_data = state_gdf.merge(risk_df, left_on='DIST_CLEAN', right_on='District_Match', how='left')
-                
-                # 2. FORCE IT BACK TO BE A GEODATAFRAME (Crucial for Plotly)
                 map_data = gpd.GeoDataFrame(map_data, geometry='geometry')
                 
-                # 3. SAFE FILLNA (Only fill data columns, not geometry)
+                # === SAFE FILLNA (Prevents crash) ===
                 cols_to_fill = ['Heat_Val', 'Flood_Val', 'Heat_Label', 'Flood_Label', 'Rain_Poss']
                 for col in cols_to_fill:
                     if col in map_data.columns:
@@ -195,7 +207,7 @@ def main():
                     colors = "Blues"
                     hover_label = 'Flood_Label'
                 
-                # Calculate Center safely
+                # Calculate Center
                 lat_center = map_data.geometry.centroid.y.mean()
                 lon_center = map_data.geometry.centroid.x.mean()
 
@@ -222,7 +234,7 @@ def main():
                 fig_map.update_layout(height=600, margin={"r":0,"t":40,"l":0,"b":0})
                 st.plotly_chart(fig_map, use_container_width=True)
             else:
-                st.warning(f"No prediction data matches the map for {selected_state}. Check spelling in Excel vs Shapefile.")
+                st.warning(f"No prediction data matches the map for {selected_state}.")
 
     st.markdown("---")
 
@@ -250,6 +262,36 @@ def main():
         m2.metric("Flood Probability", f"{int(curr_row['Extreme_Rain_Prob_%'])}% ({get_risk_label(curr_row['Extreme_Rain_Prob_%'], 'flood')})")
         m3.metric("Heat Probability", f"{int(curr_row['Heat_Prob_%'])}% ({get_risk_label(curr_row['Heat_Prob_%'], 'heat')})")
 
+    # ================= 5. DEBUGGING TOOL =================
+    # This helps you fix maps if they are still grey
+    with st.expander("🛠️ Map Troubleshooter (Click if map is empty)"):
+        st.write(f"**Selected State:** {selected_state}")
+        
+        if gdf is not None:
+            # Check if State exists
+            all_map_states = gdf['STATE_CLEAN'].unique()
+            # Try partial match
+            match = [s for s in all_map_states if selected_state.split()[0] in s]
+            
+            if match:
+                st.success(f"✅ Found State in Map as: '{match[0]}'")
+            else:
+                st.error(f"❌ Could not find '{selected_state}' in map.")
+                st.write("Available States:", all_map_states)
+            
+            # Check District Matching
+            st.write("**District Mismatch Check:**")
+            excel_districts = set([k.upper().strip() for k in all_districts_data.keys()])
+            
+            if match:
+                map_districts = set(gdf[gdf['STATE_CLEAN'] == match[0]]['DIST_CLEAN'].unique())
+                missing = excel_districts - map_districts
+                
+                if missing:
+                    st.warning(f"⚠️ {len(missing)} districts are in Excel but NOT in Map (Name mismatch):")
+                    st.write(list(missing))
+                else:
+                    st.success("✅ All districts match perfectly!")
+
 if __name__ == "__main__":
     main()
-
